@@ -1,0 +1,38 @@
+name: WIW Shift Pickup Automation
+
+on:
+  repository_dispatch:
+    types: [wiw_shift_pickup]
+  workflow_dispatch:
+    inputs:
+      payload:
+        description: 'JSON payload (for manual testing)'
+        required: false
+        default: '{}'
+
+jobs:
+  process-shift-pickup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Process shift pickup
+        env:
+          WIW_API_KEY:        ${{ secrets.WIW_API_KEY }}
+          WIW_EMAIL:          ${{ secrets.WIW_EMAIL }}
+          WIW_PASSWORD:       ${{ secrets.WIW_PASSWORD }}
+          ASANA_ACCESS_TOKEN: ${{ secrets.ASANA_ACCESS_TOKEN }}
+          ASANA_PROJECT_GID:  ${{ secrets.ASANA_PROJECT_GID }}
+          EVENT_PAYLOAD:      ${{ github.event_name == 'repository_dispatch' && toJson(github.event.client_payload) || inputs.payload }}
+        run: node src/handler.js
