@@ -13,6 +13,10 @@ const POSITION_LMT  = 11742908;
 const PROVIDER_POSITION_IDS = [POSITION_ESTI, POSITION_LMT];
 const PROVIDER_LOCATION_ID  = 5837840;
 
+// How far back to look for recent pickups (minutes). Run interval is 60 min;
+// 30-min buffer ensures no pickups are missed if the cron fires slightly late.
+const LOOKBACK_MINUTES = 90;
+
 let _session = null;
 
 function getDevKey() {
@@ -41,17 +45,24 @@ async function login() {
   return _session;
 }
 
-function headers(session) {
-  const h = { 'W-Token': session.token, 'Content-Type': 'application/json' };
-  if (session.userId) h['W-UserId'] = String(session.userId);
+function authHeaders() {
+  const h = { 'W-Token': _session.token, 'Content-Type': 'application/json' };
+  if (_session.userId) h['W-UserId'] = String(_session.userId);
   return h;
 }
 
 async function apiGet(path) {
-  const s = await login();
-  const res = await fetch(`${API}${path}`, { headers: headers(s) });
+  const res = await fetch(`${API}${path}`, { headers: authHeaders() });
   if (!res.ok) throw new Error(`GET ${path} -> HTTP ${res.status} ${await res.text()}`);
   return res.json();
+}
+
+function cutoffTime() {
+  return new Date(Date.now() - LOOKBACK_MINUTES * 60 * 1000);
+}
+
+function isRecent(timestamp) {
+  return timestamp && new Date(timestamp) >= cutoffTime();
 }
 
 async function getUser(userId) {
@@ -62,6 +73,26 @@ async function getUser(userId) {
 async function getShift(shiftId) {
   const data = await apiGet(`/shifts/${shiftId}`);
   return data.shift;
+}
+
+// Returns approved swaps that were updated within the lookback window.
+// Fetches swaps for shifts starting today through the next 60 days.
+async function getRecentApprovedSwaps() {
+  const start = new Date().toISOString().split('T')[0];
+  const end   = new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0];
+  const data  = await apiGet(`/swaps?status=2&start=${start}&end=${end}`);
+  const swaps = data.swaps || [];
+  return swaps.filter(s => isRecent(s.updated_at || s.created_at));
+}
+
+// Returns provider-location shifts that were updated within the lookback window
+// and are assigned to someone (user_id != 0). Used to detect open shift pickups.
+async function getRecentlyAssignedShifts() {
+  const start = new Date().toISOString().split('T')[0];
+  const end   = new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0];
+  const data  = await apiGet(`/shifts?start=${start}&end=${end}&location_id=${PROVIDER_LOCATION_ID}`);
+  const shifts = data.shifts || [];
+  return shifts.filter(s => s.user_id && s.user_id !== 0 && isRecent(s.updated_at));
 }
 
 // Returns all assigned shifts for a user on a given YYYY-MM-DD date.
@@ -94,6 +125,7 @@ function shiftHours(shift) {
 
 module.exports = {
   login, getUser, getShift, getUserShiftsOnDate,
+  getRecentApprovedSwaps, getRecentlyAssignedShifts,
   isProvider, positionLabel, formatShiftTime, shiftHours,
   POSITION_ESTI, POSITION_LMT, PROVIDER_POSITION_IDS, PROVIDER_LOCATION_ID,
 };
