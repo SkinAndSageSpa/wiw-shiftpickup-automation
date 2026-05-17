@@ -36,17 +36,11 @@ async function getWorkspaceGid() {
   return _workspaceGid;
 }
 
-// Returns true if a task with this exact name already exists in the project.
 async function taskExists(name) {
-  const wsGid = await getWorkspaceGid();
-  const params = new URLSearchParams({
-    'projects.any': SPA_OPERATIONS_PROJECT_GID,
-    text: name,
-    opt_fields: 'name',
-    limit: '5',
-  });
-  const res  = await fetch(`${ASANA_BASE_URL}/workspaces/${wsGid}/tasks/search?${params}`, { headers: getHeaders() });
-  const data = await res.json();
+  const wsGid  = await getWorkspaceGid();
+  const params = new URLSearchParams({ 'projects.any': SPA_OPERATIONS_PROJECT_GID, text: name, opt_fields: 'name', limit: '5' });
+  const res    = await fetch(`${ASANA_BASE_URL}/workspaces/${wsGid}/tasks/search?${params}`, { headers: getHeaders() });
+  const data   = await res.json();
   return (data.data || []).some(t => t.name === name);
 }
 
@@ -61,9 +55,7 @@ async function createTask({ name, notes, dueDate }) {
         due_on: dueDate,
         assignee: ASSIGNEE_GID,
         projects: [SPA_OPERATIONS_PROJECT_GID],
-        custom_fields: {
-          [PRIORITY_FIELD_GID]: PRIORITY_HIGH_OPTION_GID,
-        },
+        custom_fields: { [PRIORITY_FIELD_GID]: PRIORITY_HIGH_OPTION_GID },
       },
     }),
   });
@@ -72,16 +64,16 @@ async function createTask({ name, notes, dueDate }) {
 
 /**
  * Dropped shift picked up.
- * One task with a brief summary: who dropped, who picked up, date, time, hours.
- * Returns null if a task with this name already exists (dedup).
+ * shiftDate     — YYYY-MM-DD, used in task name
+ * shiftDisplay  — "Sun, 17 May 2026 4:45pm-8:30pm", used in notes
  */
 async function createDroppedShiftTask({
-  droppingProvider,           // { name, position }
-  pickingProvider,            // { name, position }
-  shiftDate,                  // YYYY-MM-DD
-  shiftTime,                  // "9:00 AM – 3:00 PM"
-  shiftHours,                 // numeric, e.g. 6
-  droppingHasRemainingShift,  // boolean
+  droppingProvider,
+  pickingProvider,
+  shiftDate,
+  shiftDisplay,
+  shiftHours,
+  droppingHasRemainingShift,
   now,
 }) {
   const name  = `Shift Dropped - Close Books in Mangomint – ${droppingProvider.name} (${shiftDate})`;
@@ -101,7 +93,7 @@ async function createDroppedShiftTask({
     notes: [
       `Dropping Provider: ${droppingProvider.name} (${droppingProvider.position})`,
       `Picking Provider:  ${pickingProvider.name} (${pickingProvider.position})`,
-      `Shift Date: ${shiftDate}  ${shiftTime}  (${shiftHours} hrs)`,
+      `Shift Date: ${shiftDisplay} (${shiftHours} hrs)`,
       '',
       mangomintNote,
     ].join('\n'),
@@ -111,15 +103,15 @@ async function createDroppedShiftTask({
 
 /**
  * Open shift picked up.
- * One task with step-by-step instructions for Sofie.
- * Returns null if a task with this name already exists (dedup).
+ * shiftDate     — YYYY-MM-DD, used in task name
+ * shiftDisplay  — "Sun, 17 May 2026 4:45pm-8:30pm", used in notes
  */
 async function createOpenShiftTask({
-  provider,       // { name, position }
-  shiftDate,      // YYYY-MM-DD
-  shiftTime,      // "9:00 AM – 3:00 PM"
-  shiftHours,     // numeric, e.g. 6
-  isBackToBack,   // boolean
+  provider,
+  shiftDate,
+  shiftDisplay,
+  shiftHours,
+  isBackToBack,
   now,
 }) {
   const name  = `Schedule Update – ${provider.name} picked up open shift (${shiftDate})`;
@@ -131,7 +123,7 @@ async function createOpenShiftTask({
   }
 
   const steps = [
-    `1. Adjust ${provider.name}'s schedule in Mangomint to reflect the picked-up shift on ${shiftDate} (${shiftTime}, ${shiftHours} hrs).`,
+    `1. Adjust ${provider.name}'s schedule in Mangomint to reflect the picked-up shift: ${shiftDisplay} (${shiftHours} hrs).`,
   ];
   if (isBackToBack) {
     steps.push(`2. ${provider.name} is now working 2 shifts back-to-back on ${shiftDate}. Add a 30-min break at 1:00 PM or 4:45 PM.`);
@@ -141,7 +133,7 @@ async function createOpenShiftTask({
     name,
     notes: [
       `Provider: ${provider.name} (${provider.position})`,
-      `Shift Date: ${shiftDate}  ${shiftTime}  (${shiftHours} hrs)`,
+      `Shift Date: ${shiftDisplay} (${shiftHours} hrs)`,
       '',
       'Action Required:',
       ...steps,

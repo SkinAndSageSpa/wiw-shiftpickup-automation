@@ -13,6 +13,8 @@ const POSITION_LMT  = 11742908;
 const PROVIDER_POSITION_IDS = [POSITION_ESTI, POSITION_LMT];
 const PROVIDER_LOCATION_ID  = 5837840;
 
+const TIMEZONE = 'America/Los_Angeles';
+
 // How far back to look for recent pickups (minutes). Run interval is 60 min;
 // 30-min buffer ensures no pickups are missed if the cron fires slightly late.
 const LOOKBACK_MINUTES = 90;
@@ -75,21 +77,19 @@ async function getShift(shiftId) {
   return data.shift;
 }
 
-// Returns approved swaps that were updated within the lookback window.
-// Fetches swaps for shifts starting today through the next 60 days.
+// Returns approved swaps updated within the lookback window.
 async function getRecentApprovedSwaps() {
-  const start = new Date().toISOString().split('T')[0];
-  const end   = new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0];
+  const start = shiftDateKey({ start_time: new Date().toISOString() });
+  const end   = shiftDateKey({ start_time: new Date(Date.now() + 60 * 86400000).toISOString() });
   const data  = await apiGet(`/swaps?status=2&start=${start}&end=${end}`);
   const swaps = data.swaps || [];
   return swaps.filter(s => isRecent(s.updated_at || s.created_at));
 }
 
-// Returns provider-location shifts that were updated within the lookback window
-// and are assigned to someone (user_id != 0). Used to detect open shift pickups.
+// Returns provider-location shifts updated within the lookback window that are assigned.
 async function getRecentlyAssignedShifts() {
-  const start = new Date().toISOString().split('T')[0];
-  const end   = new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0];
+  const start = shiftDateKey({ start_time: new Date().toISOString() });
+  const end   = shiftDateKey({ start_time: new Date(Date.now() + 60 * 86400000).toISOString() });
   const data  = await apiGet(`/shifts?start=${start}&end=${end}&location_id=${PROVIDER_LOCATION_ID}`);
   const shifts = data.shifts || [];
   return shifts.filter(s => s.user_id && s.user_id !== 0 && isRecent(s.updated_at));
@@ -113,9 +113,26 @@ function positionLabel(user) {
   return 'Provider';
 }
 
+// YYYY-MM-DD in Pacific time — used for WIW API date params and task names.
+function shiftDateKey(shift) {
+  return new Date(shift.start_time).toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+}
+
+// "Sun, 17 May 2026" in Pacific time.
+function formatShiftDate(shift) {
+  return new Date(shift.start_time).toLocaleDateString('en-GB', {
+    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
+    timeZone: TIMEZONE,
+  });
+}
+
+// "4:45pm-8:30pm" in Pacific time.
 function formatShiftTime(shift) {
-  const fmt = d => new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-  return `${fmt(shift.start_time)} – ${fmt(shift.end_time)}`;
+  const fmt = d => new Date(d)
+    .toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: TIMEZONE })
+    .toLowerCase()
+    .replace(' ', '');
+  return `${fmt(shift.start_time)}-${fmt(shift.end_time)}`;
 }
 
 function shiftHours(shift) {
@@ -126,6 +143,7 @@ function shiftHours(shift) {
 module.exports = {
   login, getUser, getShift, getUserShiftsOnDate,
   getRecentApprovedSwaps, getRecentlyAssignedShifts,
-  isProvider, positionLabel, formatShiftTime, shiftHours,
+  isProvider, positionLabel,
+  shiftDateKey, formatShiftDate, formatShiftTime, shiftHours,
   POSITION_ESTI, POSITION_LMT, PROVIDER_POSITION_IDS, PROVIDER_LOCATION_ID,
 };

@@ -27,24 +27,25 @@ async function processDroppedShift(swap, userCache) {
     return;
   }
 
-  const pickingName     = `${pickingUser.first_name} ${pickingUser.last_name}`;
-  const pickingPosition = wiw.positionLabel(pickingUser);
-  const droppingName    = `${droppingUser.first_name} ${droppingUser.last_name}`;
+  const pickingName      = `${pickingUser.first_name} ${pickingUser.last_name}`;
+  const pickingPosition  = wiw.positionLabel(pickingUser);
+  const droppingName     = `${droppingUser.first_name} ${droppingUser.last_name}`;
   const droppingPosition = wiw.positionLabel(droppingUser);
-  const shiftDate       = shift.start_time.split('T')[0];
-  const shiftTime       = wiw.formatShiftTime(shift);
-  const hours           = wiw.shiftHours(shift);
 
-  const droppingShiftsToday     = await wiw.getUserShiftsOnDate(droppingUserId, shiftDate);
+  const shiftDate    = wiw.shiftDateKey(shift);    // YYYY-MM-DD for API calls + task name
+  const shiftDisplay = `${wiw.formatShiftDate(shift)} ${wiw.formatShiftTime(shift)}`;
+  const hours        = wiw.shiftHours(shift);
+
+  const droppingShiftsToday       = await wiw.getUserShiftsOnDate(droppingUserId, shiftDate);
   const droppingHasRemainingShift = droppingShiftsToday.length > 0;
 
-  console.log(`  Swap ${swap.id}: ${droppingName} → ${pickingName}, ${shiftDate} ${shiftTime} (${hours} hrs)`);
+  console.log(`  Swap ${swap.id}: ${droppingName} → ${pickingName}, ${shiftDisplay} (${hours} hrs)`);
 
   const task = await createDroppedShiftTask({
     droppingProvider: { name: droppingName, position: droppingPosition },
     pickingProvider:  { name: pickingName,  position: pickingPosition  },
     shiftDate,
-    shiftTime,
+    shiftDisplay,
     shiftHours: hours,
     droppingHasRemainingShift,
     now: new Date(),
@@ -63,19 +64,20 @@ async function processOpenShift(shift, userCache) {
 
   const name     = `${user.first_name} ${user.last_name}`;
   const position = wiw.positionLabel(user);
-  const shiftDate = shift.start_time.split('T')[0];
-  const shiftTime = wiw.formatShiftTime(shift);
-  const hours     = wiw.shiftHours(shift);
+
+  const shiftDate    = wiw.shiftDateKey(shift);
+  const shiftDisplay = `${wiw.formatShiftDate(shift)} ${wiw.formatShiftTime(shift)}`;
+  const hours        = wiw.shiftHours(shift);
 
   const shiftsToday  = await wiw.getUserShiftsOnDate(shift.user_id, shiftDate);
   const isBackToBack = shiftsToday.length >= 2;
 
-  console.log(`  Open shift ${shift.id}: ${name} (${position}), ${shiftDate} ${shiftTime} (${hours} hrs)`);
+  console.log(`  Open shift ${shift.id}: ${name} (${position}), ${shiftDisplay} (${hours} hrs)`);
 
   const task = await createOpenShiftTask({
     provider: { name, position },
     shiftDate,
-    shiftTime,
+    shiftDisplay,
     shiftHours: hours,
     isBackToBack,
     now: new Date(),
@@ -84,7 +86,6 @@ async function processOpenShift(shift, userCache) {
   if (task) console.log(`    Asana task: ${task?.data?.permalink_url || '(no url)'}`);
 }
 
-// Simple user cache to avoid redundant WIW API calls within one run.
 function makeUserCache() {
   const cache = new Map();
   return {
@@ -101,29 +102,20 @@ async function main() {
   await wiw.login();
   const userCache = makeUserCache();
 
-  // --- Dropped shifts (swaps) ---
   const swaps = await wiw.getRecentApprovedSwaps();
   console.log(`Found ${swaps.length} recent approved swap(s).`);
   for (const swap of swaps) {
-    try {
-      await processDroppedShift(swap, userCache);
-    } catch (err) {
-      console.error(`  Swap ${swap.id}: ERROR - ${err.message}`);
-    }
+    try { await processDroppedShift(swap, userCache); }
+    catch (err) { console.error(`  Swap ${swap.id}: ERROR - ${err.message}`); }
   }
 
-  // --- Open shift pickups ---
-  // Exclude shifts already handled as swaps to avoid double-processing.
-  const swapShiftIds    = new Set(swaps.map(s => s.shift_id));
-  const recentShifts    = await wiw.getRecentlyAssignedShifts();
+  const swapShiftIds     = new Set(swaps.map(s => s.shift_id));
+  const recentShifts     = await wiw.getRecentlyAssignedShifts();
   const openShiftPickups = recentShifts.filter(s => !swapShiftIds.has(s.id));
   console.log(`Found ${openShiftPickups.length} recent open shift pickup(s).`);
   for (const shift of openShiftPickups) {
-    try {
-      await processOpenShift(shift, userCache);
-    } catch (err) {
-      console.error(`  Shift ${shift.id}: ERROR - ${err.message}`);
-    }
+    try { await processOpenShift(shift, userCache); }
+    catch (err) { console.error(`  Shift ${shift.id}: ERROR - ${err.message}`); }
   }
 
   console.log('Done.');
