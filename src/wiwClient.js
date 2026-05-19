@@ -2,6 +2,9 @@
  * wiwClient.js
  * When I Work API client — matches the official OpenAPI spec at
  * https://apidocs.wheniwork.com/external/index.html
+ *
+ * Auth note: W-UserId must NOT be included in request headers —
+ * doing so triggers a 401 on this account. W-Token alone is sufficient.
  */
 
 const API = 'https://api.wheniwork.com/2';
@@ -19,7 +22,7 @@ const TIMEZONE = 'America/Los_Angeles';
 // 30-min buffer ensures no pickups are missed if the cron fires slightly late.
 const LOOKBACK_MINUTES = 90;
 
-let _session = null;
+let _token = null;
 
 function getDevKey() {
   const k = process.env.WIW_API_KEY || process.env.WIW_API_TOKEN;
@@ -28,7 +31,7 @@ function getDevKey() {
 }
 
 async function login() {
-  if (_session) return _session;
+  if (_token) return _token;
   const email    = process.env.WIW_EMAIL;
   const password = process.env.WIW_PASSWORD;
   if (!email || !password) throw new Error('WIW_EMAIL and WIW_PASSWORD env vars required');
@@ -40,17 +43,16 @@ async function login() {
   });
   if (!res.ok) throw new Error(`WIW login failed: HTTP ${res.status} ${await res.text()}`);
   const data = await res.json();
-  const token  = data.token || data.session_token || data?.user?.token;
+  // Login response uses "person" key (not "user") and token is at the top level.
+  const token = data.token || data.session_token || data?.person?.token || data?.user?.token;
   if (!token) throw new Error('WIW login OK but no token in response');
-  const userId = data?.user?.id || data?.users?.[0]?.id;
-  _session = { token, userId };
-  return _session;
+  _token = token;
+  return _token;
 }
 
 function authHeaders() {
-  const h = { 'W-Token': _session.token, 'Content-Type': 'application/json' };
-  if (_session.userId) h['W-UserId'] = String(_session.userId);
-  return h;
+  // W-UserId must NOT be included — it causes 401 on this account.
+  return { 'W-Token': _token, 'Content-Type': 'application/json' };
 }
 
 async function apiGet(path) {
@@ -67,6 +69,14 @@ function isRecent(timestamp) {
   return timestamp && new Date(timestamp) >= cutoffTime();
 }
 
+function todayKey() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+}
+
+function futureKey(days) {
+  return new Date(Date.now() + days * 86400000).toLocaleDateString('en-CA', { timeZone: TIMEZONE });
+}
+
 async function getUser(userId) {
   const data = await apiGet(`/users/${userId}`);
   return data.user;
@@ -79,20 +89,22 @@ async function getShift(shiftId) {
 
 // Returns approved swaps updated within the lookback window.
 async function getRecentApprovedSwaps() {
-  const start = shiftDateKey({ start_time: new Date().toISOString() });
-  const end   = shiftDateKey({ start_time: new Date(Date.now() + 60 * 86400000).toISOString() });
-  const data  = await apiGet(`/swaps?status=2&start=${start}&end=${end}`);
+  const data  = await apiGet(`/swaps?status=2&start=${todayKey()}&end=${futureKey(60)}`);
   const swaps = data.swaps || [];
   return swaps.filter(s => isRecent(s.updated_at || s.created_at));
 }
 
-// Returns provider-location shifts updated within the lookback window that are assigned.
-async function getRecentlyAssignedShifts() {
-  const start = shiftDateKey({ start_time: new Date().toISOString() });
-  const end   = shiftDateKey({ start_time: new Date(Date.now() + 60 * 86400000).toISOString() });
-  const data  = await apiGet(`/shifts?start=${start}&end=${end}&location_id=${PROVIDER_LOCATION_ID}`);
+// Returns open shift pickups: shifts recently updated that were originally
+// open shifts (openshift_approval_request_id > 0) and are now assigned.
+async function getRecentOpenShiftPickups() {
+  const data   = await apiGet(`/shifts?start=${todayKey()}&end=${futureKey(60)}&location_id=${PROVIDER_LOCATION_ID}`);
   const shifts = data.shifts || [];
-  return shifts.filter(s => s.user_id && s.user_id !== 0 && isRecent(s.updated_at));
+  return shifts.filter(s =>
+    s.user_id &&
+    s.user_id !== 0 &&
+    s.openshift_approval_request_id > 0 &&
+    isRecent(s.updated_at)
+  );
 }
 
 // Returns all assigned shifts for a user on a given YYYY-MM-DD date.
@@ -142,7 +154,7 @@ function shiftHours(shift) {
 
 module.exports = {
   login, getUser, getShift, getUserShiftsOnDate,
-  getRecentApprovedSwaps, getRecentlyAssignedShifts,
+  getRecentApprovedSwaps, getRecentOpenShiftPickups,
   isProvider, positionLabel,
   shiftDateKey, formatShiftDate, formatShiftTime, shiftHours,
   POSITION_ESTI, POSITION_LMT, PROVIDER_POSITION_IDS, PROVIDER_LOCATION_ID,

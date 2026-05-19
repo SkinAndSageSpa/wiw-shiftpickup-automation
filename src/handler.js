@@ -1,11 +1,7 @@
 /**
  * handler.js
  * Polling orchestrator. Runs on a GitHub Actions cron schedule.
- *
- * Dropped shifts: detected via WIW /2/swaps (approved swap requests).
- * Open shifts: not yet implemented — WIW's updated_at on regular shifts
- *   cannot reliably distinguish a pickup from a routine schedule edit.
- *   Pending investigation of a dedicated WIW open-shift-request endpoint.
+ * Fetches recent WIW shift pickups and creates Asana tasks for each one.
  */
 
 const wiw = require('./wiwClient');
@@ -58,6 +54,38 @@ async function processDroppedShift(swap, userCache) {
   if (task) console.log(`    Asana task: ${task?.data?.permalink_url || '(no url)'}`);
 }
 
+async function processOpenShiftPickup(shift, userCache) {
+  const user = await userCache.get(shift.user_id);
+
+  if (!wiw.isProvider(user)) {
+    console.log(`  Open shift ${shift.id}: user ${user?.first_name} is not Esti/LMT, skipping`);
+    return;
+  }
+
+  const name     = `${user.first_name} ${user.last_name}`;
+  const position = wiw.positionLabel(user);
+
+  const shiftDate    = wiw.shiftDateKey(shift);
+  const shiftDisplay = `${wiw.formatShiftDate(shift)} ${wiw.formatShiftTime(shift)}`;
+  const hours        = wiw.shiftHours(shift);
+
+  const shiftsToday  = await wiw.getUserShiftsOnDate(shift.user_id, shiftDate);
+  const isBackToBack = shiftsToday.length >= 2;
+
+  console.log(`  Open shift ${shift.id}: ${name} (${position}), ${shiftDisplay} (${hours} hrs)`);
+
+  const task = await createOpenShiftTask({
+    provider: { name, position },
+    shiftDate,
+    shiftDisplay,
+    shiftHours: hours,
+    isBackToBack,
+    now: new Date(),
+  });
+
+  if (task) console.log(`    Asana task: ${task?.data?.permalink_url || '(no url)'}`);
+}
+
 function makeUserCache() {
   const cache = new Map();
   return {
@@ -74,11 +102,21 @@ async function main() {
   await wiw.login();
   const userCache = makeUserCache();
 
+  // --- Dropped shifts (swaps) ---
   const swaps = await wiw.getRecentApprovedSwaps();
   console.log(`Found ${swaps.length} recent approved swap(s).`);
   for (const swap of swaps) {
     try { await processDroppedShift(swap, userCache); }
     catch (err) { console.error(`  Swap ${swap.id}: ERROR - ${err.message}`); }
+  }
+
+  // --- Open shift pickups ---
+  // Identified by openshift_approval_request_id > 0 on recently updated shifts.
+  const openPickups = await wiw.getRecentOpenShiftPickups();
+  console.log(`Found ${openPickups.length} recent open shift pickup(s).`);
+  for (const shift of openPickups) {
+    try { await processOpenShiftPickup(shift, userCache); }
+    catch (err) { console.error(`  Shift ${shift.id}: ERROR - ${err.message}`); }
   }
 
   console.log('Done.');
